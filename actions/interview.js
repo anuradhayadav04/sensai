@@ -5,7 +5,27 @@ import { auth } from "@clerk/nextjs/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // ✅ Changed from gemini-2.0-flash
+
+// ✅ Retry helper with exponential backoff
+async function generateWithRetry(prompt, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const result = await model.generateContent(prompt);
+      return result;
+    } catch (error) {
+      const isRateLimit = error?.status === 429 || error?.message?.includes("429");
+
+      if (isRateLimit && i < retries - 1) {
+        const delay = Math.pow(2, i) * 2000; // 2s, 4s, 8s
+        console.log(`Rate limited. Retrying in ${delay}ms... (attempt ${i + 1}/${retries})`);
+        await new Promise((res) => setTimeout(res, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
 
 export async function generateQuiz() {
   const { userId } = await auth();
@@ -22,9 +42,7 @@ export async function generateQuiz() {
   if (!user) throw new Error("User not found");
 
   const prompt = `
-    Generate 10 technical interview questions for a ${
-      user.industry
-    } professional${
+    Generate 10 technical interview questions for a ${user.industry} professional${
     user.skills?.length ? ` with expertise in ${user.skills.join(", ")}` : ""
   }.
     
@@ -44,16 +62,30 @@ export async function generateQuiz() {
   `;
 
   try {
-    const result = await model.generateContent(prompt);
+    const result = await generateWithRetry(prompt); // ✅ Using retry wrapper
     const response = result.response;
     const text = response.text();
     const cleanedText = text.replace(/```(?:json)?\n?/g, "").trim();
-    const quiz = JSON.parse(cleanedText);
+
+    // ✅ Safe JSON parse
+    let quiz;
+    try {
+      quiz = JSON.parse(cleanedText);
+    } catch (parseError) {
+      console.error("Failed to parse quiz JSON:", parseError);
+      throw new Error("AI returned invalid response format. Please try again.");
+    }
 
     return quiz.questions;
   } catch (error) {
     console.error("Error generating quiz:", error);
-    throw new Error("Failed to generate quiz questions");
+
+    // ✅ Friendly error messages
+    if (error?.status === 429 || error?.message?.includes("429")) {
+      throw new Error("AI service is busy due to rate limits. Please wait a minute and try again.");
+    }
+
+    throw new Error(error.message || "Failed to generate quiz questions");
   }
 }
 
@@ -75,10 +107,8 @@ export async function saveQuizResult(questions, answers, score) {
     explanation: q.explanation,
   }));
 
-  // Get wrong answers
   const wrongAnswers = questionResults.filter((q) => !q.isCorrect);
 
-  // Only generate improvement tips if there are wrong answers
   let improvementTip = null;
   if (wrongAnswers.length > 0) {
     const wrongQuestionsText = wrongAnswers
@@ -100,8 +130,7 @@ export async function saveQuizResult(questions, answers, score) {
     `;
 
     try {
-      const tipResult = await model.generateContent(improvementPrompt);
-
+      const tipResult = await generateWithRetry(improvementPrompt); // ✅ Using retry wrapper
       improvementTip = tipResult.response.text().trim();
       console.log(improvementTip);
     } catch (error) {

@@ -16,7 +16,6 @@ export async function updateUser(data) {
   if (!user) throw new Error("User not found");
 
   try {
-    // Start a transaction to handle both operations
     const result = await db.$transaction(
       async (tx) => {
         // First check if industry exists
@@ -26,11 +25,29 @@ export async function updateUser(data) {
           },
         });
 
-        // If industry doesn't exist, create it with default values
+        // If industry doesn't exist, create it
         if (!industryInsight) {
-          const insights = await generateAIInsights(data.industry);
 
-          industryInsight = await db.industryInsight.create({
+          // ── AI call wrapped in try-catch ──
+          // If Gemini quota is exceeded, use default values
+          // so onboarding still completes successfully
+          let insights;
+          try {
+            insights = await generateAIInsights(data.industry);
+          } catch (aiError) {
+            console.warn("AI insights failed, using defaults:", aiError.message);
+            insights = {
+              salaryRanges: [],
+              growthRate: 0,
+              demandLevel: "Medium",
+              topSkills: [],
+              marketOutlook: "Neutral",
+              keyTrends: [],
+              recommendedSkills: [],
+            };
+          }
+
+          industryInsight = await tx.industryInsight.create({
             data: {
               industry: data.industry,
               ...insights,
@@ -39,7 +56,7 @@ export async function updateUser(data) {
           });
         }
 
-        // Now update the user
+        // Update the user
         const updatedUser = await tx.user.update({
           where: {
             id: user.id,
@@ -55,12 +72,12 @@ export async function updateUser(data) {
         return { updatedUser, industryInsight };
       },
       {
-        timeout: 10000, // default: 5000
+        timeout: 10000,
       }
     );
 
     revalidatePath("/");
-    return result.user;
+    return result.updatedUser;
   } catch (error) {
     console.error("Error updating user and industry:", error.message);
     throw new Error("Failed to update profile");

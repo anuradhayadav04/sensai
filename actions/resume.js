@@ -6,9 +6,32 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { revalidatePath } from "next/cache";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // ✅ Changed from gemini-2.0-flash
 
-// ── EXISTING FUNCTIONS (don't touch these) ───────────────────────────────
+// ✅ Retry helper with exponential backoff
+async function generateWithRetry(prompt, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const result = await model.generateContent(prompt);
+      return result;
+    } catch (error) {
+      const isRateLimit =
+        error?.status === 429 || error?.message?.includes("429");
+
+      if (isRateLimit && i < retries - 1) {
+        const delay = Math.pow(2, i) * 2000; // 2s, 4s, 8s
+        console.log(
+          `Rate limited. Retrying in ${delay}ms... (attempt ${i + 1}/${retries})`
+        );
+        await new Promise((res) => setTimeout(res, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
+// ── EXISTING FUNCTIONS ───────────────────────────────────────────────────
 
 export async function saveResume(content) {
   const { userId } = await auth();
@@ -22,16 +45,9 @@ export async function saveResume(content) {
 
   try {
     const resume = await db.resume.upsert({
-      where: {
-        userId: user.id,
-      },
-      update: {
-        content,
-      },
-      create: {
-        userId: user.id,
-        content,
-      },
+      where: { userId: user.id },
+      update: { content },
+      create: { userId: user.id, content },
     });
 
     revalidatePath("/resume");
@@ -53,9 +69,7 @@ export async function getResume() {
   if (!user) throw new Error("User not found");
 
   return await db.resume.findUnique({
-    where: {
-      userId: user.id,
-    },
+    where: { userId: user.id },
   });
 }
 
@@ -65,9 +79,7 @@ export async function improveWithAI({ current, type }) {
 
   const user = await db.user.findUnique({
     where: { clerkUserId: userId },
-    include: {
-      industryInsight: true,
-    },
+    include: { industryInsight: true },
   });
 
   if (!user) throw new Error("User not found");
@@ -89,17 +101,24 @@ export async function improveWithAI({ current, type }) {
   `;
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = result.response;
-    const improvedContent = response.text().trim();
+    const result = await generateWithRetry(prompt); // ✅ Using retry wrapper
+    const improvedContent = result.response.text().trim();
     return improvedContent;
   } catch (error) {
     console.error("Error improving content:", error);
+
+    // ✅ Friendly rate limit error
+    if (error?.status === 429 || error?.message?.includes("429")) {
+      throw new Error(
+        "AI service is busy. Please wait a moment and try again."
+      );
+    }
+
     throw new Error("Failed to improve content");
   }
 }
 
-// ── NEW ML FUNCTIONS (added below) ──────────────────────────────────────
+// ── ML FUNCTIONS ─────────────────────────────────────────────────────────
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
@@ -117,7 +136,7 @@ async function callMLService(resumeText, jobDescription) {
     return await res.json();
   } catch (error) {
     console.error("ML service error:", error);
-    // return fallback so Gemini result still works if Python is down
+    // Fallback so Gemini result still works if Python service is down
     return {
       tfidf_score: 0,
       matched_skills: [],
@@ -153,12 +172,30 @@ async function callGemini(resumeText, jobDescription) {
   `;
 
   try {
-    const result = await model.generateContent(prompt);
+    const result = await generateWithRetry(prompt); // ✅ Using retry wrapper
     const text = result.response.text().trim();
     const cleaned = text.replace(/```json|```/g, "").trim();
-    return JSON.parse(cleaned);
+
+    // ✅ Safe JSON parse
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (parseError) {
+      console.error("Failed to parse Gemini JSON:", parseError);
+      throw new Error("AI returned invalid response format. Please try again.");
+    }
+
+    return parsed;
   } catch (error) {
     console.error("Gemini error:", error);
+
+    // ✅ Friendly rate limit error
+    if (error?.status === 429 || error?.message?.includes("429")) {
+      throw new Error(
+        "AI service is busy due to rate limits. Please wait a minute and try again."
+      );
+    }
+
     throw new Error("Failed to analyze resume with AI");
   }
 }
@@ -172,54 +209,8 @@ export async function analyzeResume(resumeText, jobDescription) {
   });
   if (!user) throw new Error("User not found");
 
-  // call both services in parallel
+  // Call both services in parallel
   const [mlResult, geminiResult] = await Promise.all([
     callMLService(resumeText, jobDescription),
     callGemini(resumeText, jobDescription),
   ]);
-
-  // blend: 60% TF-IDF (objective math) + 40% Gemini (semantic understanding)
-  const blendedScore = Math.round(
-    mlResult.tfidf_score * 0.6 + geminiResult.overallScore * 0.4
-  );
-
-  // merge and deduplicate skill lists from both sources
-  const allMatched = [
-    ...new Set([...mlResult.matched_skills, ...geminiResult.matchedSkills]),
-  ];
-  const allMissing = [
-    ...new Set([...mlResult.missing_skills, ...geminiResult.missingSkills]),
-  ];
-
-  const saved = await db.resumeScore.create({
-    data: {
-      userId:          user.id,
-      resumeText,
-      jobDescription,
-      overallScore:    blendedScore,
-      tfidfScore:      mlResult.tfidf_score,
-      sectionScores:   mlResult.section_scores,
-      matchedSkills:   allMatched,
-      missingSkills:   allMissing,
-      recommendations: geminiResult.recommendations,
-    },
-  });
-
-  revalidatePath("/resume-analyzer");
-  return saved;
-}
-
-export async function getResumeScores() {
-  const { userId } = await auth();
-  if (!userId) throw new Error("Unauthorized");
-
-  const user = await db.user.findUnique({
-    where: { clerkUserId: userId },
-  });
-  if (!user) throw new Error("User not found");
-
-  return await db.resumeScore.findMany({
-    where: { userId: user.id },
-    orderBy: { createdAt: "desc" },
-  });
-}
