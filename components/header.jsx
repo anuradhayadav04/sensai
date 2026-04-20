@@ -64,7 +64,7 @@ export default async function Header() {
                 <DropdownMenuItem asChild>
                   <Link href="/resume" className="flex items-center gap-2">
                     <FileText className="h-4 w-4" />
-                    Build Resume
+                    Build and Analyze Resume
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>

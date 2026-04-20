@@ -1,32 +1,27 @@
 export const faqs = [
   {
-    question: "What makes Sensai unique as a career development tool?",
+    question: "How does Sensai analyze my resume?",
     answer:
-      "Sensai combines AI-powered career tools with industry-specific insights to help you advance your career. Our platform offers three main features: an intelligent resume builder, a cover letter generator, and an adaptive interview preparation system. Each tool is tailored to your industry and skills, providing personalized guidance for your professional journey.",
+      "Sensai uses AI to evaluate your resume against real job descriptions and industry standards. It analyzes key factors like keyword relevance, formatting, experience alignment, and overall structure to generate an ATS-style score. This helps you understand how well your resume performs in real hiring systems.",
   },
   {
-    question: "How does Sensai create tailored content?",
+    question: "What is the Resume Score and how is it calculated?",
     answer:
-      "Sensai learns about your industry, experience, and skills during onboarding. It then uses this information to generate customized resumes, cover letters, and interview questions. The content is specifically aligned with your professional background and industry standards, making it highly relevant and effective.",
+      "Your resume score is a data-driven evaluation based on how closely your resume matches job requirements. Sensai considers keyword matching, skills alignment, readability, and role relevance to give you a clear score along with actionable suggestions to improve it.",
   },
   {
-    question: "How accurate and up-to-date are Sensai's industry insights?",
+    question: "What is Skill Gap Analysis?",
     answer:
-      "We update our industry insights weekly using advanced AI analysis of current market trends. This includes salary data, in-demand skills, and industry growth patterns. Our system constantly evolves to ensure you have the most relevant information for your career decisions.",
+      "Skill Gap Analysis compares your current skills with the requirements of your target job role. Sensai identifies missing or weak areas and highlights the exact skills you need to improve, helping you focus on what truly matters for your career growth.",
   },
   {
-    question: "Is my data secure with Sensai?",
+    question: "How accurate is the skill gap detection?",
     answer:
-      "Absolutely. We prioritize the security of your professional information. All data is encrypted and securely stored using industry-standard practices. We use Clerk for authentication and never share your personal information with third parties.",
+      "Sensai’s AI evaluates multiple data points including job descriptions, industry trends, and role-specific requirements. This ensures that the identified skill gaps are practical, relevant, and aligned with what recruiters are actively looking for.",
   },
   {
-    question: "How can I track my interview preparation progress?",
+    question: "How can I use these insights to improve my chances?",
     answer:
-      "Sensai tracks your performance across multiple practice interviews, providing detailed analytics and improvement suggestions. You can view your progress over time, identify areas for improvement, and receive AI-generated tips to enhance your interview skills based on your responses.",
-  },
-  {
-    question: "Can I edit the AI-generated content?",
-    answer:
-      "Yes! While Sensai generates high-quality initial content, you have full control to edit and customize all generated resumes, cover letters, and other content. Our markdown editor makes it easy to refine the content to perfectly match your needs.",
+      "Sensai doesn’t just point out gaps — it guides you forward. You’ll get clear recommendations on which skills to learn, what to add to your resume, and how to better align with your target role. This makes your preparation focused, efficient, and result-driven.",
   },
 ];

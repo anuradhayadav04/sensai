@@ -2,24 +2,7 @@
 
 import { db } from "@/lib/prisma";
 import { auth } from "@clerk/nextjs/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-// Check API Key
-if (!process.env.GEMINI_API_KEY) {
-  throw new Error("GEMINI_API_KEY is missing in .env");
-}
-
-// Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// ✅ Working Gemini model
-const model = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash",
-  generationConfig: {
-    temperature: 0.7,
-    maxOutputTokens: 2048,
-  },
-});
+import { generateWithGroq } from "@/lib/groq"; // ✅ replaced Gemini
 
 export const generateAIInsights = async (industry) => {
   const prompt = `
@@ -48,15 +31,9 @@ Rules:
 `;
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = result.response;
-    const text = response.text();
-
-    // Clean AI response if markdown is returned
+    const text = await generateWithGroq(prompt); // ✅ direct string
     const cleanedText = text.replace(/```json|```/g, "").trim();
-
     const parsed = JSON.parse(cleanedText);
-
     return parsed;
   } catch (error) {
     console.error("AI generation error:", error.message);
@@ -66,21 +43,14 @@ Rules:
 
 export async function getIndustryInsights() {
   const { userId } = await auth();
-
-  if (!userId) {
-    throw new Error("Unauthorized");
-  }
+  if (!userId) throw new Error("Unauthorized");
 
   const user = await db.user.findUnique({
     where: { clerkUserId: userId },
-    include: {
-      industryInsight: true,
-    },
+    include: { industryInsight: true },
   });
 
-  if (!user) {
-    throw new Error("User not found");
-  }
+  if (!user) throw new Error("User not found");
 
   // If insights not present → generate them
   if (!user.industryInsight) {

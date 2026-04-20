@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/lib/prisma";
-import { auth } from "@clerk/nextjs/server";
+import { auth, currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import { generateAIInsights } from "./dashboard";
 
@@ -9,28 +9,45 @@ export async function updateUser(data) {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
-  const user = await db.user.findUnique({
-    where: { clerkUserId: userId },
-  });
+  const clerkUser = await currentUser();
+  if (!clerkUser) throw new Error("Unauthorized");
 
-  if (!user) throw new Error("User not found");
+  const email = clerkUser.emailAddresses[0].emailAddress;
+
+  // ✅ try to find by clerkUserId first, then by email
+  let user = await db.user.findUnique({ where: { clerkUserId: userId } });
+
+  if (!user) {
+    // check if email already exists (from a previous sign-up)
+    user = await db.user.findUnique({ where: { email } });
+
+    if (user) {
+      // ✅ update the clerkUserId to match current session
+      user = await db.user.update({
+        where: { email },
+        data: { clerkUserId: userId },
+      });
+    } else {
+      // ✅ brand new user — create fresh
+      user = await db.user.create({
+        data: {
+          clerkUserId: userId,
+          email,
+          name: `${clerkUser.firstName || ""} ${clerkUser.lastName || ""}`.trim(),
+          imageUrl: clerkUser.imageUrl,
+        },
+      });
+    }
+  }
 
   try {
     const result = await db.$transaction(
       async (tx) => {
-        // First check if industry exists
         let industryInsight = await tx.industryInsight.findUnique({
-          where: {
-            industry: data.industry,
-          },
+          where: { industry: data.industry },
         });
 
-        // If industry doesn't exist, create it
         if (!industryInsight) {
-
-          // ── AI call wrapped in try-catch ──
-          // If Gemini quota is exceeded, use default values
-          // so onboarding still completes successfully
           let insights;
           try {
             insights = await generateAIInsights(data.industry);
@@ -56,11 +73,8 @@ export async function updateUser(data) {
           });
         }
 
-        // Update the user
         const updatedUser = await tx.user.update({
-          where: {
-            id: user.id,
-          },
+          where: { id: user.id },
           data: {
             industry: data.industry,
             experience: data.experience,
@@ -71,9 +85,7 @@ export async function updateUser(data) {
 
         return { updatedUser, industryInsight };
       },
-      {
-        timeout: 10000,
-      }
+      { timeout: 10000 }
     );
 
     revalidatePath("/");
@@ -88,20 +100,10 @@ export async function getUserOnboardingStatus() {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
-  const user = await db.user.findUnique({
-    where: { clerkUserId: userId },
-  });
-
-  if (!user) throw new Error("User not found");
-
   try {
     const user = await db.user.findUnique({
-      where: {
-        clerkUserId: userId,
-      },
-      select: {
-        industry: true,
-      },
+      where: { clerkUserId: userId },
+      select: { industry: true },
     });
 
     return {

@@ -2,30 +2,7 @@
 
 import { db } from "@/lib/prisma";
 import { auth } from "@clerk/nextjs/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // ✅ Changed from gemini-2.0-flash
-
-// ✅ Retry helper with exponential backoff
-async function generateWithRetry(prompt, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const result = await model.generateContent(prompt);
-      return result;
-    } catch (error) {
-      const isRateLimit = error?.status === 429 || error?.message?.includes("429");
-
-      if (isRateLimit && i < retries - 1) {
-        const delay = Math.pow(2, i) * 2000; // 2s, 4s, 8s
-        console.log(`Rate limited. Retrying in ${delay}ms... (attempt ${i + 1}/${retries})`);
-        await new Promise((res) => setTimeout(res, delay));
-      } else {
-        throw error;
-      }
-    }
-  }
-}
+import { generateWithGroq } from "@/lib/groq"; // ✅ replaced Gemini
 
 export async function generateQuiz() {
   const { userId } = await auth();
@@ -33,21 +10,15 @@ export async function generateQuiz() {
 
   const user = await db.user.findUnique({
     where: { clerkUserId: userId },
-    select: {
-      industry: true,
-      skills: true,
-    },
+    select: { industry: true, skills: true },
   });
-
   if (!user) throw new Error("User not found");
 
   const prompt = `
     Generate 10 technical interview questions for a ${user.industry} professional${
     user.skills?.length ? ` with expertise in ${user.skills.join(", ")}` : ""
   }.
-    
     Each question should be multiple choice with 4 options.
-    
     Return the response in this JSON format only, no additional text:
     {
       "questions": [
@@ -62,30 +33,22 @@ export async function generateQuiz() {
   `;
 
   try {
-    const result = await generateWithRetry(prompt); // ✅ Using retry wrapper
-    const response = result.response;
-    const text = response.text();
+    const text = await generateWithGroq(prompt);
     const cleanedText = text.replace(/```(?:json)?\n?/g, "").trim();
-
-    // ✅ Safe JSON parse
     let quiz;
     try {
       quiz = JSON.parse(cleanedText);
     } catch (parseError) {
       console.error("Failed to parse quiz JSON:", parseError);
-      throw new Error("AI returned invalid response format. Please try again.");
+      throw new Error("AI returned invalid format. Please try again.");
     }
-
     return quiz.questions;
   } catch (error) {
     console.error("Error generating quiz:", error);
-
-    // ✅ Friendly error messages
     if (error?.status === 429 || error?.message?.includes("429")) {
-      throw new Error("AI service is busy due to rate limits. Please wait a minute and try again.");
+      throw new Error("AI service is busy. Please wait a moment and try again.");
     }
-
-    throw new Error(error.message || "Failed to generate quiz questions");
+    throw new Error("Failed to generate quiz questions");
   }
 }
 
@@ -93,10 +56,7 @@ export async function saveQuizResult(questions, answers, score) {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
-  const user = await db.user.findUnique({
-    where: { clerkUserId: userId },
-  });
-
+  const user = await db.user.findUnique({ where: { clerkUserId: userId } });
   if (!user) throw new Error("User not found");
 
   const questionResults = questions.map((q, index) => ({
@@ -108,8 +68,8 @@ export async function saveQuizResult(questions, answers, score) {
   }));
 
   const wrongAnswers = questionResults.filter((q) => !q.isCorrect);
-
   let improvementTip = null;
+
   if (wrongAnswers.length > 0) {
     const wrongQuestionsText = wrongAnswers
       .map(
@@ -120,22 +80,15 @@ export async function saveQuizResult(questions, answers, score) {
 
     const improvementPrompt = `
       The user got the following ${user.industry} technical interview questions wrong:
-
       ${wrongQuestionsText}
-
-      Based on these mistakes, provide a concise, specific improvement tip.
-      Focus on the knowledge gaps revealed by these wrong answers.
-      Keep the response under 2 sentences and make it encouraging.
-      Don't explicitly mention the mistakes, instead focus on what to learn/practice.
+      Provide a concise improvement tip in under 2 sentences. Be encouraging.
+      Focus on what to learn/practice, not on the mistakes.
     `;
 
     try {
-      const tipResult = await generateWithRetry(improvementPrompt); // ✅ Using retry wrapper
-      improvementTip = tipResult.response.text().trim();
-      console.log(improvementTip);
+      improvementTip = await generateWithGroq(improvementPrompt);
     } catch (error) {
       console.error("Error generating improvement tip:", error);
-      // Continue without improvement tip if generation fails
     }
   }
 
@@ -149,7 +102,6 @@ export async function saveQuizResult(questions, answers, score) {
         improvementTip,
       },
     });
-
     return assessment;
   } catch (error) {
     console.error("Error saving quiz result:", error);
@@ -161,23 +113,14 @@ export async function getAssessments() {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
-  const user = await db.user.findUnique({
-    where: { clerkUserId: userId },
-  });
-
+  const user = await db.user.findUnique({ where: { clerkUserId: userId } });
   if (!user) throw new Error("User not found");
 
   try {
-    const assessments = await db.assessment.findMany({
-      where: {
-        userId: user.id,
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
+    return await db.assessment.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "asc" },
     });
-
-    return assessments;
   } catch (error) {
     console.error("Error fetching assessments:", error);
     throw new Error("Failed to fetch assessments");
