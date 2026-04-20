@@ -91,7 +91,9 @@ def analyze(req: AnalyzeRequest):
         "missing_skills": missing_skills,
         "section_scores": section_scores,
     }
-    if __name__ == "__main__":
+
+# This should be at the very bottom, NO indentation
+if __name__ == "__main__":
     import uvicorn
     import os
     port = int(os.environ.get("PORT", 8000))
